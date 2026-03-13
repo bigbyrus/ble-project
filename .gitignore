@@ -1,6 +1,8 @@
 # VS Code settings
 .vscode/
 .vscode/*
+
+#DevContainer settings
 .devcontainer/
 .devcontainer/*
 
