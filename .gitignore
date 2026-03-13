@@ -1,6 +1,8 @@
 # VS Code settings
 .vscode/
 .vscode/*
+.devcontainer/
+.devcontainer/*
 
 # Directory metadata
 .directory
@@ -21,7 +23,8 @@ build/
 *.o
 *.a
 *.out
-*.exe # For any host-side utilities compiled on Windows
+*.exe
+*.projbuild
 
 # ESP-IDF specific build outputs
 *.bin
@@ -30,6 +33,10 @@ build/
 flasher_args.json # Generated in build directory
 sdkconfig.old
 sdkconfig
+*.defaults
+*.defaults.esp32c2
+*.defaults.esp32c3
+*.defaults.esp32s3
 
 # ESP-IDF dependencies
 # For older versions or manual component management
