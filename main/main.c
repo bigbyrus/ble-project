@@ -22,10 +22,16 @@
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 
+/* NimBLE APIs */
+#include "host/ble_gatt.h"
+#include "services/gatt/ble_svc_gatt.h"
+#include "host/ble_gap.h"
+
 /* First use ADC to read analog data from breakout board, then:                  */
 /*      --> advertise as Nordic UART Service, and wait to connect to EnvisionPCB */
 /*      --> format analog data to send                                           */
 /*      --> when BLE is connected, write data to the EnvisionPCB                 */
+
 
 /* Variables: */
 const static char *TAG = "ADC";
@@ -45,19 +51,29 @@ static gpio_config_t gp0 = {
     .pull_down_en = GPIO_PULLDOWN_DISABLE,
     .intr_type = GPIO_INTR_DISABLE
 };
-static gpio_config_t gp1 = {
-    .pin_bit_mask = (1ULL<<23),
-    .mode = GPIO_MODE_OUTPUT,
-    .pull_up_en = GPIO_PULLUP_DISABLE,
-    .pull_down_en = GPIO_PULLDOWN_DISABLE,
-    .intr_type = GPIO_INTR_DISABLE
-};
+
+static uint16_t uart_rx_handle;
+static uint16_t uart_tx_handle;
+static uint16_t conn_id;
+static esp_gatt_if_t gattc_if_global;
+
+static const ble_uuid128_t uart_svc_uuid =
+    BLE_UUID128_INIT(0x9E,0xCA,0xDC,0x24,0x0E,0xE5,0xA9,0xE0,0x93,0xF3,0xA3,
+        0xB5,0x01,0x00,0x40,0x6E);
+
+static const ble_uuid128_t uart_rx_chr_uuid =
+    BLE_UUID128_INIT(0x9E,0xCA,0xDC,0x24,0x0E,0xE5,0xA9,0xE0,0x93,0xF3,0xA3,
+        0xB5,0x02,0x00,0x40,0x6E);
+
+static const ble_uuid128_t uart_tx_chr_uuid =
+    BLE_UUID128_INIT(0x9E,0xCA,0xDC,0x24,0x0E,0xE5,0xA9,0xE0,0x93,0xF3,0xA3,
+        0xB5,0x03,0x00,0x40,0x6E);
 
 /* Configure Channels 0 and 3 to be read from ADC Unit 1*/
 static void adc_init(adc_oneshot_unit_handle_t *handle, adc_oneshot_unit_init_cfg_t init_cfg, adc_oneshot_chan_cfg_t cfg){
     ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_cfg, handle));
     ESP_ERROR_CHECK(adc_oneshot_config_channel(*handle, ADC_CHANNEL_0, &cfg));
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(*handle, ADC_CHANNEL_3, &cfg));
+    //ESP_ERROR_CHECK(adc_oneshot_config_channel(*handle, ADC_CHANNEL_3, &cfg));
 }
 
 /* Read raw adc data */
@@ -66,35 +82,34 @@ static void adc_task(void *pvParameters){
         ESP_ERROR_CHECK(adc_oneshot_read(handle1, ADC_CHANNEL_0, &adc_raw[0]));
         ESP_LOGI(TAG, "ADC%d Channel[%d] Raw Data: %d", ADC_UNIT_1, ADC_CHANNEL_0, adc_raw[0]);
 
-        vTaskDelay(pdMS_TO_TICKS(500));
-
-        ESP_ERROR_CHECK(adc_oneshot_read(handle1, ADC_CHANNEL_3, &adc_raw[1]));
-        ESP_LOGI(TAG, "ADC%d Channel[%d] Raw Data: %d", ADC_UNIT_1, ADC_CHANNEL_3, adc_raw[1]);
-
-        vTaskDelay(pdMS_TO_TICKS(500));
-    }
-}
-
-/* Blink LED on board */
-static void led_task(void *pvParameters){
-    while(1){
-        gpio_set_level(GPIO_NUM_23, 1);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
-        gpio_set_level(GPIO_NUM_23, 0);
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
 void app_main(void)
 {
+    esp_err_t ret = ESP_OK;
+
+    /* NVS flash initialization */
+    ret = nvs_flash_init();
+    if(ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND){
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+
+    ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_BLE));
+
+    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+
+    esp_bt_controller_init(&bt_cfg);
+    esp_bt_controller_enable(ESP_BT_MODE_BLE);
+
     /* turn on switch */
     gpio_config(&gp0);
-    gpio_config(&gp1);
     gpio_set_level(GPIO_NUM_32, 1);
 
     /* initialize ADC1_CH0 and ADC1_CH3 */
     adc_init(&handle1, init_cfg, cfg);
 
     xTaskCreate(adc_task, "adc_task", 4096, NULL, 5, NULL);
-    xTaskCreate(led_task, "led_task", 4096, NULL, 5, NULL);
 }
