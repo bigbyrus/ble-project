@@ -69,6 +69,181 @@ static const ble_uuid128_t uart_tx_chr_uuid =
     BLE_UUID128_INIT(0x9E,0xCA,0xDC,0x24,0x0E,0xE5,0xA9,0xE0,0x93,0xF3,0xA3,
         0xB5,0x03,0x00,0x40,0x6E);
 
+
+
+void ble_host_task(void *param){
+    ESP_LOGI(tag, "inside host task");
+    nimble_port_run();
+    nimble_port_freertos_deinit();
+}
+
+static int should_connect(const struct ble_gap_disc_desc *disc){
+    struct ble_hs_adv_fields fields;
+    int rc, i;
+
+    if(disc->event_type != BLE_HCI_ADV_RPT_EVTYPE_ADV_IND && 
+        disc->event_type != BLE_HCI_ADV_RPT_EVTYPE_DIR_IND){
+        return 0;
+    }
+
+    rc = ble_hs_adv_parse_fields(&fields, disc->data, disc->length_data);
+    if(rc != 0){
+        return 0;
+    }
+
+    for(i=0; i<fields.num_uuids16; i++){
+        if(ble_uuid_u16(&fields.uuids16[i].u) == BLECENT_SVC_ALERT_UUID){
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static void connect_device(void *disc){
+    uint8_t our_addr;
+    int rc;
+    ble_addr_t *addr;
+
+    if(!should_connect((struct ble_gap_disc_desc *) disc))
+        return;
+    
+    rc = ble_gap_disc_cancel();
+    if(rc != 0){
+        MODLOG_DFLT(DEBUG, "Failed to cancel scan, rc=%d\n", rc);
+        return;
+    }
+
+    rc = ble_hs_id_infer_auto(0, &our_addr);
+    if(rc != 0){
+        MODLOG_DFLT(ERROR, "Error determining address, rc=%d\n", rc);
+        return;
+    }
+
+    addr = &((struct ble_gap_disc_desc *)disc)->addr;
+
+    rc = ble_gap_connect(our_addr, addr, 30000, NULL, gap_event_handler, NULL);
+    if(rc != 0){
+        MODLOG_DFLT(ERROR, "Failed to connect to device, addr_type=%d addr=%s\n",
+                    addr->type, addr_str(addr->val));
+        return;
+    }
+}
+
+static void on_disc_complete(const struct peer *peer, int status, void *arg){
+    if(status != 0){
+        MODLOG_DFLT(ERROR, "Error: Service discovery failed, status=%d conn_handle=%d\n",
+                    status, peer->conn_handle);
+        ble_gap_terminate(peer->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        return;
+    }
+
+    MODLOG_DFLT(INFO, "Service discovery completed, status=%d conn_handle=%d\n",
+                status, peer->conn_handle);
+    
+    read_write_subscribe(peer);
+}
+
+static void sync_callback(void){
+    int rc;
+    rc = ble_hs_util_ensure_addr(0);
+    assert(rc == 0);
+
+    start_scan();
+}
+
+static void reset_callback(void *param){
+    MODLOG_DFLT(ERROR, "Resetting..., reason=%d\n", reason);
+}
+
+static void start_scan(void){
+    int rc;
+    uint8_t our_addr;
+    struct ble_gap_disc_params disc_params = {0};
+    
+    rc = ble_hs_id_infer_auto(0, &our_addr);
+    if(rc != 0){
+        MODLOG_DFLT(ERROR, "error determining address type, rc = %d\n", rc);
+        return;
+    }
+
+    disc_params.filter_duplicates = 1;
+    disc_params.passive = 1;
+    disc_params.itvl = 0;
+    disc_params.window = 0;
+    disc_params.filter_policy = 0;
+    disc_params.limited = 0;
+
+    rc = ble_gap_disc(our_addr, BLE_HS_FOREVER, &disc_params, gap_event_handler, NULL);
+
+    if(rc != 0){
+        MODLOG_DFLT(ERROR, "Error initiating GAP discovery procedure, rc=%d\n", rc);
+    }
+}
+
+static int gap_event_handler(struct ble_gap_event *event, void *arg){
+    struct ble_gap_conn_desc desc;
+    struct ble_hs_adv_fields fields;
+    int rc;
+
+    switch(event->type){
+        case BLE_GAP_EVENT_DISC:
+            rc = ble_hs_adv_parse_fields(&fields, event->disc.data, event->disc.length_data);
+            if(rc != 0)
+                return 0;
+            print_adv_fields(&fields);
+            connect_device(&event->disc);
+        
+        case BLE_GAP_EVENT_CONNECT:
+            if(event->connect.status == 0){
+                MODLOG_DFLT(INFO, "Connection established ");
+
+                rc = ble_gap_conn_find(event->connect.conn_handle, &desc);
+                assert(rc==0);
+                print_conn_desc(&desc);
+                MODLOG_DFLT(INFO, "\n");
+
+                rc = peer_add(event->connect.conn_handle);
+                if(rc != 0){
+                    MODLOG_DFLT(ERROR, "Failed to add peer, rc=%d\n", rc);
+                    return 0;
+                }
+
+                rc = peer_disc_all(event->connect.conn_handle, on_disc_complete, NULL);
+                if(rc != 0){
+                    MODLOG_DFLT(ERROR, "Failed to discover services; rc=%d\n", rc);
+                    return 0;
+                }
+            }
+            else{
+                MODLOG_DFLT(ERROR, "Error: Connection failed, status=%d\n", event->connect.status);
+                start_scan();
+            }
+            return 0;
+
+        case BLE_GAP_DISCONNECT:
+            MODLOG_DFLT(INFO, "disconnected, reason=%d ", event->disconnect.reason);
+            print_conn_desc(&event->disconnect.conn);
+            MODLOG_DFLT(INFO, "\n");
+
+            peer_delete(event->disconnect.conn.conn_handle);
+
+            start_scan();
+            return 0;
+
+        case BLE_GAP_EVENT_NOTIFY_RX:
+            MODLOG_DFLT(INFO, "received %s, conn_handle=%d attr_handle=%d attr_len=%d\n",
+                        event->notify_rx.indication ? "indication" : "notification", 
+                        event->notify_rx.conn_handle, event->notify_rx.attr_handle,
+                        OS_MBUF_PKTLEN(event->notify_rx.om));
+            
+            return 0;
+        
+        default:
+            return 0;
+    }
+}
+
 /* Configure Channels 0 and 3 to be read from ADC Unit 1*/
 static void adc_init(adc_oneshot_unit_handle_t *handle, adc_oneshot_unit_init_cfg_t init_cfg, adc_oneshot_chan_cfg_t cfg){
     ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_cfg, handle));
@@ -88,21 +263,13 @@ static void adc_task(void *pvParameters){
 
 void app_main(void)
 {
-    esp_err_t ret = ESP_OK;
-
     /* NVS flash initialization */
-    ret = nvs_flash_init();
+    esp_err_t ret = nvs_flash_init();
     if(ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND){
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();
     }
-
-    ESP_ERROR_CHECK(esp_bt_controller_mem_release(ESP_BT_MODE_BLE));
-
-    esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-
-    esp_bt_controller_init(&bt_cfg);
-    esp_bt_controller_enable(ESP_BT_MODE_BLE);
+    ESP_ERROR_CHECK(ret);
 
     /* turn on switch */
     gpio_config(&gp0);
@@ -112,4 +279,26 @@ void app_main(void)
     adc_init(&handle1, init_cfg, cfg);
 
     xTaskCreate(adc_task, "adc_task", 4096, NULL, 5, NULL);
+
+    /* NimBLE stack initialization */
+    ret = nimble_port_init();
+    if(ret != ESP_OK){
+        ESP_LOGE(tag, "Failed to initialize NimBLE stack: %d ", ret);
+        return;
+    }
+
+    ble_hs_cfg.reset_cb = reset_callback;
+    ble_hs_cfg.sync_cb = sync_callback;
+    ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
+
+    int rc;
+    rc = peer_init(MYNEWT_VAL(BLE_MAX_CONNECTIONS), 64, 64, 64);
+    assert(rc == 0);
+
+    int m;
+    m = ble_svc_gap_device_name_set("cyrus");
+    assert(m == 0);
+
+    ble_store_config_init();
+    nimble_port_freertos_init(ble_host_task);
 }
