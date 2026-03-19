@@ -9,34 +9,29 @@
 #include "esp_system.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
-#include "esp_bt.h"
-
-#include "esp_gap_ble_api.h"
-#include "esp_gatts_api.h"
-#include "esp_bt_defs.h"
-#include "esp_bt_main.h"
-#include "esp_bt_device.h"
-#include "esp_gatt_common_api.h"
 
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
 
-/* NimBLE APIs */
-#include "host/ble_gatt.h"
-#include "services/gatt/ble_svc_gatt.h"
-#include "host/ble_gap.h"
+#include "nimble/nimble_port.h"
+#include "nimble/nimble_port_freertos.h"
+#include "host/ble_hs.h"
+#include "host/util/util.h"
+#include "console/console.h"
+#include "services/gap/ble_svc_gap.h"
+#include "ble.h"
 
-/* First use ADC to read analog data from breakout board, then:                  */
-/*      --> advertise as Nordic UART Service, and wait to connect to EnvisionPCB */
-/*      --> format analog data to send                                           */
-/*      --> when BLE is connected, write data to the EnvisionPCB                 */
+
+/* figure out how to incorporate adc task to write ADC data to the Rx characteristic*/
 
 
 /* Variables: */
-const static char *TAG = "ADC";
+const static char *TAG = "BLE";
 static int adc_raw[2];
 static adc_oneshot_unit_handle_t handle1;
+static uint16_t uart_rx_handle;
+static uint16_t curr_handle;
 static adc_oneshot_unit_init_cfg_t init_cfg = {
     .unit_id = ADC_UNIT_1
 };
@@ -51,11 +46,6 @@ static gpio_config_t gp0 = {
     .pull_down_en = GPIO_PULLDOWN_DISABLE,
     .intr_type = GPIO_INTR_DISABLE
 };
-
-static uint16_t uart_rx_handle;
-static uint16_t uart_tx_handle;
-static uint16_t conn_id;
-static esp_gatt_if_t gattc_if_global;
 
 static const ble_uuid128_t uart_svc_uuid =
     BLE_UUID128_INIT(0x9E,0xCA,0xDC,0x24,0x0E,0xE5,0xA9,0xE0,0x93,0xF3,0xA3,
@@ -77,6 +67,56 @@ void ble_host_task(void *param){
     nimble_port_freertos_deinit();
 }
 
+/* attempting this instead of the stream of callbacks in example */
+static void characteristic_disc(const struct peer *peer){
+    const struct peer_chr *rx_chr;
+    const struct peer_chr *tx_chr;
+    int rc;
+    
+    rx_chr = peer_chr_find_uuid(peer, &uart_svc_uuid.u, &uart_rx_chr_uuid.u);
+
+    if(rx_chr == NULL){
+        ESP_LOGE(TAG, "NUS RX characteristic not found");
+        ble_gap_terminate(peer->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    }
+
+    /* use in RTOS task to write data to pcb */
+    uart_rx_handle = rx_chr->chr.val_handle;
+    curr_handle = peer->conn_handle;
+
+    tx_chr = peer_chr_find_uuid(peer, &uart_svc_uuid.u, &uart_tx_chr_uuid.u);
+
+    if(tx_chr == NULL){
+        ESP_LOGE(TAG, "NUS TX characteristic not found");
+        ble_gap_terminate(peer->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    }
+
+    rc = ble_gattc_subscribe(peer->conn_handle,
+                             tx_chr->chr.val_handle,
+                             BLE_GATT_CHR_PROP_NOTIFY,
+                             NULL, NULL);
+
+    if(rc != 0){
+        ESP_LOGE(TAG, "Failed to subscribe, rc=%d", rc);
+        ble_gap_terminate(peer->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+    }
+
+    ESP_LOGI(TAG, "Subscribed to NUS TX");
+
+    const char *msg = "hello from central";
+    struct os_mbuf *om = ble_hs_mbuf_from_flat(msg, strlen(msg));
+
+    rc = ble_gattc_write_no_rsp(peer->conn_handle,
+                                rx_chr->chr.val_handle,
+                                om);
+
+    if(rc != 0){
+        ESP_LOGE(TAG, "Write failed rc=%d", rc);
+    }
+
+    return;
+}
+
 static int should_connect(const struct ble_gap_disc_desc *disc){
     struct ble_hs_adv_fields fields;
     int rc, i;
@@ -91,8 +131,8 @@ static int should_connect(const struct ble_gap_disc_desc *disc){
         return 0;
     }
 
-    for(i=0; i<fields.num_uuids16; i++){
-        if(ble_uuid_u16(&fields.uuids16[i].u) == BLECENT_SVC_ALERT_UUID){
+    for(i=0; i<fields.num_uuids128; i++){
+        if(ble_uuid_cmp(&fields.uuids128[i].u) == &uart_svc_uuid){
             return 1;
         }
     }
@@ -100,7 +140,7 @@ static int should_connect(const struct ble_gap_disc_desc *disc){
     return 0;
 }
 
-static void connect_device(void *disc){
+static void connect_uart_device(void *disc){
     uint8_t our_addr;
     int rc;
     ble_addr_t *addr;
@@ -110,13 +150,13 @@ static void connect_device(void *disc){
     
     rc = ble_gap_disc_cancel();
     if(rc != 0){
-        MODLOG_DFLT(DEBUG, "Failed to cancel scan, rc=%d\n", rc);
+        ESP_LOGD(TAG, "Failed to cancel scan, rc=%d\n", rc);
         return;
     }
 
     rc = ble_hs_id_infer_auto(0, &our_addr);
     if(rc != 0){
-        MODLOG_DFLT(ERROR, "Error determining address, rc=%d\n", rc);
+        ESP_LOGE(TAG, "Error determining address, rc=%d\n", rc);
         return;
     }
 
@@ -124,7 +164,7 @@ static void connect_device(void *disc){
 
     rc = ble_gap_connect(our_addr, addr, 30000, NULL, gap_event_handler, NULL);
     if(rc != 0){
-        MODLOG_DFLT(ERROR, "Failed to connect to device, addr_type=%d addr=%s\n",
+        ESP_LOGE(TAG, "Failed to connect to device, addr_type=%d addr=%s\n",
                     addr->type, addr_str(addr->val));
         return;
     }
@@ -132,16 +172,16 @@ static void connect_device(void *disc){
 
 static void on_disc_complete(const struct peer *peer, int status, void *arg){
     if(status != 0){
-        MODLOG_DFLT(ERROR, "Error: Service discovery failed, status=%d conn_handle=%d\n",
+        ESP_LOGE(TAG, "Error: Service discovery failed, status=%d conn_handle=%d\n",
                     status, peer->conn_handle);
         ble_gap_terminate(peer->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
         return;
     }
 
-    MODLOG_DFLT(INFO, "Service discovery completed, status=%d conn_handle=%d\n",
+    ESP_LOGI(TAG, "Service discovery completed, status=%d conn_handle=%d\n",
                 status, peer->conn_handle);
     
-    read_write_subscribe(peer);
+    characteristic_disc(peer);
 }
 
 static void sync_callback(void){
@@ -153,7 +193,7 @@ static void sync_callback(void){
 }
 
 static void reset_callback(void *param){
-    MODLOG_DFLT(ERROR, "Resetting..., reason=%d\n", reason);
+    ESP_LOGE(TAG, "Resetting..., reason=%d\n", reason);
 }
 
 static void start_scan(void){
@@ -163,7 +203,7 @@ static void start_scan(void){
     
     rc = ble_hs_id_infer_auto(0, &our_addr);
     if(rc != 0){
-        MODLOG_DFLT(ERROR, "error determining address type, rc = %d\n", rc);
+        ESP_LOGE(TAG, "error determining address type, rc = %d\n", rc);
         return;
     }
 
@@ -177,7 +217,7 @@ static void start_scan(void){
     rc = ble_gap_disc(our_addr, BLE_HS_FOREVER, &disc_params, gap_event_handler, NULL);
 
     if(rc != 0){
-        MODLOG_DFLT(ERROR, "Error initiating GAP discovery procedure, rc=%d\n", rc);
+        ESP_LOGE(TAG, "Error initiating GAP discovery procedure, rc=%d\n", rc);
     }
 }
 
@@ -192,39 +232,40 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg){
             if(rc != 0)
                 return 0;
             print_adv_fields(&fields);
-            connect_device(&event->disc);
+            connect_uart_device(&event->disc);
+            return 0;
         
         case BLE_GAP_EVENT_CONNECT:
             if(event->connect.status == 0){
-                MODLOG_DFLT(INFO, "Connection established ");
+                ESP_LOGI(TAG, "Connection established ");
 
                 rc = ble_gap_conn_find(event->connect.conn_handle, &desc);
                 assert(rc==0);
                 print_conn_desc(&desc);
-                MODLOG_DFLT(INFO, "\n");
+                ESP_LOGI(TAG, "\n");
 
                 rc = peer_add(event->connect.conn_handle);
                 if(rc != 0){
-                    MODLOG_DFLT(ERROR, "Failed to add peer, rc=%d\n", rc);
+                    ESP_LOGE(TAG, "Failed to add peer, rc=%d\n", rc);
                     return 0;
                 }
 
                 rc = peer_disc_all(event->connect.conn_handle, on_disc_complete, NULL);
                 if(rc != 0){
-                    MODLOG_DFLT(ERROR, "Failed to discover services; rc=%d\n", rc);
+                    ESP_LOGE(TAG, "Failed to discover services; rc=%d\n", rc);
                     return 0;
                 }
             }
             else{
-                MODLOG_DFLT(ERROR, "Error: Connection failed, status=%d\n", event->connect.status);
+                ESP_LOGE(TAG, "Error: Connection failed, status=%d\n", event->connect.status);
                 start_scan();
             }
             return 0;
 
         case BLE_GAP_DISCONNECT:
-            MODLOG_DFLT(INFO, "disconnected, reason=%d ", event->disconnect.reason);
+            ESP_LOGI(TAG, "disconnected, reason=%d ", event->disconnect.reason);
             print_conn_desc(&event->disconnect.conn);
-            MODLOG_DFLT(INFO, "\n");
+            ESP_LOGI(TAG, "\n");
 
             peer_delete(event->disconnect.conn.conn_handle);
 
@@ -232,11 +273,16 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg){
             return 0;
 
         case BLE_GAP_EVENT_NOTIFY_RX:
-            MODLOG_DFLT(INFO, "received %s, conn_handle=%d attr_handle=%d attr_len=%d\n",
-                        event->notify_rx.indication ? "indication" : "notification", 
-                        event->notify_rx.conn_handle, event->notify_rx.attr_handle,
-                        OS_MBUF_PKTLEN(event->notify_rx.om));
-            
+            int len = OS_MBUF_PKTLEN(event->notify_rx.om);
+            uint8_t data[128];
+
+            os_mbuf_copydata(event->notify_rx.om, 0, len, data);
+
+            ESP_LOGI(TAG, "Received: %.*s", len, data);
+            return 0;
+
+        case BLE_GAP_EVENT_MTU:
+            ESP_LOGI("BLE", "MTU updated to %d", event->mtu.value);
             return 0;
         
         default:
