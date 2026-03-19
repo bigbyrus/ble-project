@@ -101,7 +101,7 @@ print_adv_fields(const struct ble_hs_adv_fields *fields)
                     fields->uuids16_is_complete ? "" : "in");
         for (i = 0; i < fields->num_uuids16; i++) {
             print_uuid(&fields->uuids16[i].u);
-            ESP_LOGD(DEBUG, " ");
+            ESP_LOGD("peer", " ");
         }
         ESP_LOGD("peer", "\n");
     }

@@ -28,6 +28,7 @@ void ble_store_config_init(void);
 static void start_scan(void);
 static int gap_event_handler(struct ble_gap_event *event, void *arg);
 static void adc_task(void *arg);
+static int ble_gattc_subscribe(const struct peer* peer);
 
 /* Variables: */
 const static char *TAG = "BLE";
@@ -61,6 +62,37 @@ static const ble_uuid128_t uart_rx_chr_uuid =
 static const ble_uuid128_t uart_tx_chr_uuid =
     BLE_UUID128_INIT(0x9E,0xCA,0xDC,0x24,0x0E,0xE5,0xA9,0xE0,0x93,0xF3,0xA3,
         0xB5,0x03,0x00,0x40,0x6E);
+
+
+/* NEED A GATT EVENT HANDLER TO RECEIVE NOTIFICATIONS (maybe) */
+static int ble_gattc_subscribe(const struct peer* peer){
+    const struct peer_dsc *dsc;
+    int rc;
+    uint8_t value[2];
+
+    dsc = peer_dsc_find_uuid(peer,
+                             &uart_svc_uuid.u,
+                             &uart_tx_chr_uuid.u,
+                             BLE_UUID16_DECLARE(BLE_GATT_DSC_CLT_CFG_UUID16));
+    if(dsc == NULL){
+        ESP_LOGE(TAG, "Peer lacks a CCCD for the subscribable characteristic\n");
+        return 1;
+    }
+
+    /* Write 0x00 and 0x01 (The subscription code) to the CCCD */
+    value[0] = 1;
+    value[1] = 0;
+    rc = ble_gattc_write_flat(peer->conn_handle, dsc->dsc.handle,
+                              value, sizeof(value), NULL, NULL);
+    if(rc != 0){
+        ESP_LOGE(TAG,
+                    "Failed to subscribe to the subscribable characteristic; "
+                    "rc=%d\n", rc);
+        return 2;
+    }
+
+    return 0;
+}
 
 
 /* NimBLE stack is configured running in rtos task, then this function is invoked */
@@ -98,10 +130,7 @@ static void characteristic_disc(const struct peer *peer){
         ble_gap_terminate(curr_handle, BLE_ERR_REM_USER_CONN_TERM);
     }
 
-    rc = ble_gattc_subscribe(curr_handle,
-                             tx_chr->chr.val_handle,
-                             BLE_GATT_CHR_PROP_NOTIFY,
-                             NULL, NULL);
+    rc = ble_gattc_subscribe(peer);
 
     if(rc != 0){
         ESP_LOGE(TAG, "Failed to subscribe, rc=%d", rc);
@@ -132,7 +161,7 @@ static int should_connect(const struct ble_gap_disc_desc *disc){
     }
 
     for(i=0; i<fields.num_uuids128; i++){
-        if(ble_uuid_cmp(&fields.uuids128[i].u, &uart_svc_uuid) == 0){
+        if(ble_uuid_cmp(&fields.uuids128[i].u, &uart_svc_uuid.u) == 0){
             return 1;
         }
     }
@@ -286,13 +315,18 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg){
             start_scan();
             return 0;
 
+        case BLE_GAP_EVENT_DISC_COMPLETE:
+            ESP_LOGI(TAG, "discovery complete; reason=%d\n",
+                        event->disc_complete.reason);
+            return 0;
+        
         case BLE_GAP_EVENT_NOTIFY_RX:
             int len = OS_MBUF_PKTLEN(event->notify_rx.om);
             uint8_t data[128];
 
             os_mbuf_copydata(event->notify_rx.om, 0, len, data);
 
-            ESP_LOGI(TAG, "Received: %.*s", len, data);
+            ESP_LOGI(TAG, "Received from CIRCUITPY: %.*s", len, data);
             return 0;
 
         case BLE_GAP_EVENT_MTU:
