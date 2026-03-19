@@ -23,8 +23,11 @@
 #include "esp_central.h"
 
 
-/* figure out how to incorporate adc task to write ADC data to the Rx characteristic*/
-
+/* Function Declarations: */
+void ble_store_config_init(void);
+static void start_scan(void);
+static int gap_event_handler(struct ble_gap_event *event, void *arg);
+static void adc_task(void *arg);
 
 /* Variables: */
 const static char *TAG = "BLE";
@@ -39,13 +42,13 @@ static adc_oneshot_chan_cfg_t cfg = {
     .atten = ADC_ATTEN_DB_12,
     .bitwidth = ADC_BITWIDTH_DEFAULT
 };
-static gpio_config_t gp0 = {
+/* static gpio_config_t gp0 = {
     .pin_bit_mask = (1ULL<<32),
     .mode = GPIO_MODE_OUTPUT,
     .pull_up_en = GPIO_PULLUP_DISABLE,
     .pull_down_en = GPIO_PULLDOWN_DISABLE,
     .intr_type = GPIO_INTR_DISABLE
-};
+}; */
 
 static const ble_uuid128_t uart_svc_uuid =
     BLE_UUID128_INIT(0x9E,0xCA,0xDC,0x24,0x0E,0xE5,0xA9,0xE0,0x93,0xF3,0xA3,
@@ -62,7 +65,7 @@ static const ble_uuid128_t uart_tx_chr_uuid =
 
 /* NimBLE stack is configured running in rtos task, then this function is invoked */
 void ble_host_task(void *param){
-    ESP_LOGI(tag, "inside host task");
+    ESP_LOGI(TAG, "inside host task");
     nimble_port_run();
 
     /* this instruction is reached when nimble_port_stop() is called */
@@ -92,32 +95,22 @@ static void characteristic_disc(const struct peer *peer){
 
     if(tx_chr == NULL){
         ESP_LOGE(TAG, "NUS TX characteristic not found");
-        ble_gap_terminate(peer->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        ble_gap_terminate(curr_handle, BLE_ERR_REM_USER_CONN_TERM);
     }
 
-    rc = ble_gattc_subscribe(peer->conn_handle,
+    rc = ble_gattc_subscribe(curr_handle,
                              tx_chr->chr.val_handle,
                              BLE_GATT_CHR_PROP_NOTIFY,
                              NULL, NULL);
 
     if(rc != 0){
         ESP_LOGE(TAG, "Failed to subscribe, rc=%d", rc);
-        ble_gap_terminate(peer->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
+        ble_gap_terminate(curr_handle, BLE_ERR_REM_USER_CONN_TERM);
     }
 
     /* START ADC_TASK HERE */
     ESP_LOGI(TAG, "Subscribed to NUS TX, writing analog data now...");
-
-    const char *msg = "hello from central";
-    struct os_mbuf *om = ble_hs_mbuf_from_flat(msg, strlen(msg));
-
-    rc = ble_gattc_write_no_rsp(peer->conn_handle,
-                                rx_chr->chr.val_handle,
-                                om);
-
-    if(rc != 0){
-        ESP_LOGE(TAG, "Write failed rc=%d", rc);
-    }
+    xTaskCreate(adc_task, "adc_task", 4096, NULL, 5, NULL);
 
     return;
 }
@@ -139,7 +132,7 @@ static int should_connect(const struct ble_gap_disc_desc *disc){
     }
 
     for(i=0; i<fields.num_uuids128; i++){
-        if(ble_uuid_cmp(&fields.uuids128[i].u) == &uart_svc_uuid){
+        if(ble_uuid_cmp(&fields.uuids128[i].u, &uart_svc_uuid) == 0){
             return 1;
         }
     }
@@ -209,8 +202,8 @@ static void sync_callback(void){
     start_scan();
 }
 
-static void reset_callback(void *param){
-    ESP_LOGE(TAG, "Resetting..., reason=%d\n", reason);
+static void reset_callback(int reason){
+    ESP_LOGE(TAG, "Resetting..., reason: %d\n", reason);
 }
 
 /* Now that BLE stack has synced, we start scanning and transfer control to the */
@@ -227,7 +220,7 @@ static void start_scan(void){
     }
 
     disc_params.filter_duplicates = 1;
-    disc_params.passive = 1;
+    disc_params.passive = 0;
     disc_params.itvl = 0;
     disc_params.window = 0;
     disc_params.filter_policy = 0;
@@ -283,7 +276,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg){
             }
             return 0;
 
-        case BLE_GAP_DISCONNECT:
+        case BLE_GAP_EVENT_DISCONNECT:
             ESP_LOGI(TAG, "disconnected, reason=%d ", event->disconnect.reason);
             print_conn_desc(&event->disconnect.conn);
             ESP_LOGI(TAG, "\n");
@@ -318,13 +311,30 @@ static void adc_init(adc_oneshot_unit_handle_t *handle, adc_oneshot_unit_init_cf
     //ESP_ERROR_CHECK(adc_oneshot_config_channel(*handle, ADC_CHANNEL_3, &cfg));
 }
 
-/* Read raw adc data */
+/* Read ADC data (12-bits) and send it to BLE peripheral as two 8-bit unsigned integers */
 static void adc_task(void *arg){
+    uint8_t data[2];
+    int rc;
     while(1){
         adc_oneshot_read(handle1, ADC_CHANNEL_0, &adc_raw[0]);
         ESP_LOGI(TAG, "ADC%d Channel[%d] Raw Data: %d", ADC_UNIT_1, ADC_CHANNEL_0, adc_raw[0]);
 
-        vTaskDelay(pdMS_TO_TICKS(50));
+        /* store LSB first, MSB last (little endian) */
+        data[0] = adc_raw[0] & 0xFF;
+        data[1] = (adc_raw[0] >> 8) & 0xFF;
+
+        struct os_mbuf *om = ble_hs_mbuf_from_flat(data, 2);
+
+        rc = ble_gattc_write_no_rsp(curr_handle,
+                                uart_rx_handle,
+                                om);
+
+        if(rc != 0){
+            ESP_LOGE(TAG, "Write failed, rc=%d", rc);
+            ble_gap_terminate(curr_handle, BLE_ERR_REM_USER_CONN_TERM);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
@@ -341,13 +351,10 @@ void app_main(void)
     /* initialize ADC1_CH0 */
     adc_init(&handle1, init_cfg, cfg);
 
-    /* begin reading analog values */
-    xTaskCreate(adc_task, "adc_task", 4096, NULL, 5, NULL);
-
     /* NimBLE stack initialization */
     ret = nimble_port_init();
     if(ret != ESP_OK){
-        ESP_LOGE(tag, "Failed to initialize NimBLE stack: %d ", ret);
+        ESP_LOGE(TAG, "Failed to initialize NimBLE stack: %d ", ret);
         return;
     }
 
