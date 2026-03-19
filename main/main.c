@@ -20,7 +20,7 @@
 #include "host/util/util.h"
 #include "console/console.h"
 #include "services/gap/ble_svc_gap.h"
-#include "ble.h"
+#include "esp_central.h"
 
 
 /* figure out how to incorporate adc task to write ADC data to the Rx characteristic*/
@@ -60,14 +60,18 @@ static const ble_uuid128_t uart_tx_chr_uuid =
         0xB5,0x03,0x00,0x40,0x6E);
 
 
-
+/* NimBLE stack is configured running in rtos task, then this function is invoked */
 void ble_host_task(void *param){
     ESP_LOGI(tag, "inside host task");
     nimble_port_run();
+
+    /* this instruction is reached when nimble_port_stop() is called */
     nimble_port_freertos_deinit();
 }
 
-/* attempting this instead of the stream of callbacks in example */
+/* Perform GATT operations on the peripheral (peer) device,  */
+/*      --> subscribe to notifications                       */
+/*      --> write to Rx characteristic                       */
 static void characteristic_disc(const struct peer *peer){
     const struct peer_chr *rx_chr;
     const struct peer_chr *tx_chr;
@@ -101,7 +105,8 @@ static void characteristic_disc(const struct peer *peer){
         ble_gap_terminate(peer->conn_handle, BLE_ERR_REM_USER_CONN_TERM);
     }
 
-    ESP_LOGI(TAG, "Subscribed to NUS TX");
+    /* START ADC_TASK HERE */
+    ESP_LOGI(TAG, "Subscribed to NUS TX, writing analog data now...");
 
     const char *msg = "hello from central";
     struct os_mbuf *om = ble_hs_mbuf_from_flat(msg, strlen(msg));
@@ -117,6 +122,8 @@ static void characteristic_disc(const struct peer *peer){
     return;
 }
 
+/* Filtering process, don't connect to discovered devices if they don't */
+/* PUBLICLY ADVERTISE the Nordic UART Service                           */
 static int should_connect(const struct ble_gap_disc_desc *disc){
     struct ble_hs_adv_fields fields;
     int rc, i;
@@ -140,6 +147,8 @@ static int should_connect(const struct ble_gap_disc_desc *disc){
     return 0;
 }
 
+/* attempts to connect to a device if it publicly advertises the Nordic UART Service */
+/* although if it does not, we return, doing nothing                                 */
 static void connect_uart_device(void *disc){
     uint8_t our_addr;
     int rc;
@@ -168,8 +177,12 @@ static void connect_uart_device(void *disc){
                     addr->type, addr_str(addr->val));
         return;
     }
+
+    ESP_LOGI(TAG, "Connection established succesfully :)");
 }
 
+/* Connection to a peer device has been established, this function attempts to perform */
+/* GATT procedures on the peripheral device                                            */
 static void on_disc_complete(const struct peer *peer, int status, void *arg){
     if(status != 0){
         ESP_LOGE(TAG, "Error: Service discovery failed, status=%d conn_handle=%d\n",
@@ -184,6 +197,10 @@ static void on_disc_complete(const struct peer *peer, int status, void *arg){
     characteristic_disc(peer);
 }
 
+/* Once BLE stack is initialized, configured, and running ble_host_task() in an RTOS task */
+/*  --> ble_host_task() calls nimble_port_run()                                           */
+/*  --> when BLE stack has 'synced' this function is called                               */
+/*  --> scanning for nearby BLE devices begins                                            */
 static void sync_callback(void){
     int rc;
     rc = ble_hs_util_ensure_addr(0);
@@ -196,6 +213,8 @@ static void reset_callback(void *param){
     ESP_LOGE(TAG, "Resetting..., reason=%d\n", reason);
 }
 
+/* Now that BLE stack has synced, we start scanning and transfer control to the */
+/* GAP Event Handler to handle device Discovery and Connection                  */
 static void start_scan(void){
     int rc;
     uint8_t our_addr;
@@ -221,6 +240,8 @@ static void start_scan(void){
     }
 }
 
+/* GAP Event Handler allows for this BLE Central device to discover and */ 
+/* connect to Peripheral BLE devices                                    */
 static int gap_event_handler(struct ble_gap_event *event, void *arg){
     struct ble_gap_conn_desc desc;
     struct ble_hs_adv_fields fields;
@@ -298,9 +319,9 @@ static void adc_init(adc_oneshot_unit_handle_t *handle, adc_oneshot_unit_init_cf
 }
 
 /* Read raw adc data */
-static void adc_task(void *pvParameters){
+static void adc_task(void *arg){
     while(1){
-        ESP_ERROR_CHECK(adc_oneshot_read(handle1, ADC_CHANNEL_0, &adc_raw[0]));
+        adc_oneshot_read(handle1, ADC_CHANNEL_0, &adc_raw[0]);
         ESP_LOGI(TAG, "ADC%d Channel[%d] Raw Data: %d", ADC_UNIT_1, ADC_CHANNEL_0, adc_raw[0]);
 
         vTaskDelay(pdMS_TO_TICKS(50));
@@ -317,13 +338,10 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
-    /* turn on switch */
-    gpio_config(&gp0);
-    gpio_set_level(GPIO_NUM_32, 1);
-
-    /* initialize ADC1_CH0 and ADC1_CH3 */
+    /* initialize ADC1_CH0 */
     adc_init(&handle1, init_cfg, cfg);
 
+    /* begin reading analog values */
     xTaskCreate(adc_task, "adc_task", 4096, NULL, 5, NULL);
 
     /* NimBLE stack initialization */
@@ -333,18 +351,24 @@ void app_main(void)
         return;
     }
 
+    /* configure host by defining Callback functions */
     ble_hs_cfg.reset_cb = reset_callback;
     ble_hs_cfg.sync_cb = sync_callback;
     ble_hs_cfg.store_status_cb = ble_store_util_status_rr;
 
+    /* manage peer services/characteristics objects in ble */
     int rc;
     rc = peer_init(MYNEWT_VAL(BLE_MAX_CONNECTIONS), 64, 64, 64);
     assert(rc == 0);
 
+    /* set this device's name */
     int m;
     m = ble_svc_gap_device_name_set("cyrus");
     assert(m == 0);
 
+    /* continue to configure the host */
     ble_store_config_init();
+
+    /* create RTOS task where NimBLE will run */
     nimble_port_freertos_init(ble_host_task);
 }

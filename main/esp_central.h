@@ -7,7 +7,7 @@
 #ifndef H_ESP_CENTRAL_
 #define H_ESP_CENTRAL_
 
-#include "modlog/modlog.h"
+#include "esp_log.h"
 #ifdef __cplusplus
 extern "C" {
 #endif

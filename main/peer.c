@@ -7,7 +7,6 @@
 #include "host/ble_hs.h"
 #include "esp_central.h"
 
-#if NIMBLE_BLE_CONNECT
 static void *peer_svc_mem;
 static struct os_mempool peer_svc_pool;
 
@@ -1091,4 +1090,3 @@ err:
     peer_free_mem();
     return rc;
 }
-#endif
