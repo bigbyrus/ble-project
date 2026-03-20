@@ -43,28 +43,20 @@ static adc_oneshot_chan_cfg_t cfg = {
     .atten = ADC_ATTEN_DB_12,
     .bitwidth = ADC_BITWIDTH_DEFAULT
 };
-/* static gpio_config_t gp0 = {
-    .pin_bit_mask = (1ULL<<32),
-    .mode = GPIO_MODE_OUTPUT,
-    .pull_up_en = GPIO_PULLUP_DISABLE,
-    .pull_down_en = GPIO_PULLDOWN_DISABLE,
-    .intr_type = GPIO_INTR_DISABLE
-}; */
-
 static const ble_uuid128_t uart_svc_uuid =
     BLE_UUID128_INIT(0x9E,0xCA,0xDC,0x24,0x0E,0xE5,0xA9,0xE0,0x93,0xF3,0xA3,
         0xB5,0x01,0x00,0x40,0x6E);
-
 static const ble_uuid128_t uart_rx_chr_uuid =
     BLE_UUID128_INIT(0x9E,0xCA,0xDC,0x24,0x0E,0xE5,0xA9,0xE0,0x93,0xF3,0xA3,
         0xB5,0x02,0x00,0x40,0x6E);
-
 static const ble_uuid128_t uart_tx_chr_uuid =
     BLE_UUID128_INIT(0x9E,0xCA,0xDC,0x24,0x0E,0xE5,0xA9,0xE0,0x93,0xF3,0xA3,
         0xB5,0x03,0x00,0x40,0x6E);
 
 
-/* NEED A GATT EVENT HANDLER TO RECEIVE NOTIFICATIONS (maybe) */
+
+/* NEED A GATT EVENT HANDLER TO RECEIVE NOTIFICATIONS (maybe)            */
+/* otherwise this subscribes to the peripheral devices Tx characteristic */
 static int ble_gattc_subscribe(const struct peer* peer){
     const struct peer_dsc *dsc;
     int rc;
