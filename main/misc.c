@@ -5,7 +5,6 @@
  */
 
 #include "host/ble_hs.h"
-#include "esp_log.h"
 #include "esp_central.h"
 
 /**
