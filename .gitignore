@@ -6,60 +6,11 @@
 .devcontainer/
 .devcontainer/*
 
-# Directory metadata
-.directory
-
-# Temporary files
-*~
-*.swp
-*.swo
-*.bak
-*.tmp
-
-# Log files
-*.log
-
-# Build artifacts and directories
-**/build/
 build/
-*.o
-*.a
-*.out
-*.exe
-*.projbuild
 
-# ESP-IDF specific build outputs
-*.bin
-*.elf
-*.map
-flasher_args.json # Generated in build directory
 sdkconfig.old
 sdkconfig
 *.defaults
 *.defaults.esp32c2
 *.defaults.esp32c3
 *.defaults.esp32s3
-
-# ESP-IDF dependencies
-# For older versions or manual component management
-/components/.idf/
-**/components/.idf/
-# For modern ESP-IDF component manager
-managed_components/
-# If ESP-IDF tools are installed/referenced locally to the project
-.espressif/
-
-# CMake generated files
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-install_manifest.txt
-CTestTestfile.cmake
-
-# Python environment files
-*.pyc
-*.pyo
-*.pyd
-__pycache__/
-*.egg-info/
-dist/
