@@ -19,10 +19,8 @@ This repo contains C code which implements a fully functional BLE Central device
 The device that will **publicly advertise the Nordic UART Service** is a PCB ([built by me](https://github.com/bigbyrus/pcb-assembly)) holding an ESP32-S3-MINI microcontroller with an RF antenna. The exposed pins on the PCB are connected to an array of LEDs to visually notify the user that the device is functioning properly.
 
 <p align="center">
-  <img src="img/vumeter.png" width="400">
-  <em>VU Shield</em><br>
   <img src="img/esp32-s3-mini-1.png" width="300">
-  <em>Custom PCB</em><br>
+  <img src="img/vumeter.png" width="400"><br>
 </p>
 
 ---
