@@ -6,6 +6,9 @@ This repo contains C code which implements a fully functional BLE Central device
 ![Demo](img/IMG_1625gif.gif)
 
 The video shows a simple potentiometer to display the basics. But the demo below will show **microphone data sent over BLE** being represented visually on the LEDs.
+
+
+Demo
 ---
 
 <p>
