@@ -5,10 +5,11 @@ This repo contains C code which implements a fully functional BLE Central device
 
 ![Demo](img/IMG_1625gif.gif)
 
+The video shows a simple potentiometer to display the basics. But the demo below will show **microphone data sent over BLE** being represented visually on the LEDs.
 ---
 
 <p>
-    In the demo I am using an ESP32-WROOM-32E DevKit, which contains an ESP32 microcontroller with an RF antenna. This device will read and process microphone data coming from the ADC unit.
+    In the demo I am using an ESP32-WROOM-32E DevKit, which contains an ESP32 microcontroller with an RF antenna. This device will read and process microphone data coming from the ADC unit, as well as handle all BLE GAP/GATT events.
 </p>
 
 <p align="center">
@@ -19,7 +20,7 @@ This repo contains C code which implements a fully functional BLE Central device
 The device that will **publicly advertise the Nordic UART Service** is a PCB ([built by me](https://github.com/bigbyrus/pcb-assembly)) holding an ESP32-S3-MINI microcontroller with an RF antenna. The exposed pins on the PCB are connected to an array of LEDs to visually notify the user that the device is functioning properly.
 
 <p align="center">
-  <img src="img/esp32-s3-mini-1.png" width="300">
+  <img src="img/esp32-s3-mini-1.png" width="200">
   <img src="img/vumeter.png" width="400"><br>
 </p>
 
