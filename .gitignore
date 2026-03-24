@@ -14,3 +14,5 @@ sdkconfig
 *.defaults.esp32c2
 *.defaults.esp32c3
 *.defaults.esp32s3
+
+img/
