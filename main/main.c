@@ -30,7 +30,9 @@ static int ble_gattc_subscribe(const struct peer* peer);
 
 /* Variables: */
 const static char *TAG = "BLE";
-static int adc_raw[2];
+static int adc_raw;
+int min;
+int max;
 static adc_oneshot_unit_handle_t handle1;
 static uint16_t uart_rx_handle;
 static uint16_t curr_handle;
@@ -38,7 +40,7 @@ static adc_oneshot_unit_init_cfg_t init_cfg = {
     .unit_id = ADC_UNIT_1
 };
 static adc_oneshot_chan_cfg_t cfg = {
-    .atten = ADC_ATTEN_DB_12,
+    .atten = ADC_ATTEN_DB_0,
     .bitwidth = ADC_BITWIDTH_DEFAULT
 };
 static const ble_uuid128_t uart_svc_uuid =
@@ -306,27 +308,41 @@ void ble_host_task(void *param){;
 }
 
 
-/* Configure ADC Channels 0 and 3 to be read from ADC Unit 1*/
+/* Configure ADC Channel 3 to be read from ADC Unit 1*/
 static void adc_init(adc_oneshot_unit_handle_t *handle, adc_oneshot_unit_init_cfg_t init_cfg, adc_oneshot_chan_cfg_t cfg){
     ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_cfg, handle));
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(*handle, ADC_CHANNEL_0, &cfg));
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(*handle, ADC_CHANNEL_3, &cfg));
 }
 
 
-/* Read ADC data (12-bits) and send it to BLE peripheral as two 8-bit unsigned integers */
+/* Read microphone data and send it to BLE peripheral as two 8-bit unsigned integers */
 static void adc_task(void *arg){
     uint8_t data[2];
     int rc;
+
+    /* continuous task */
     while(1){
-        adc_oneshot_read(handle1, ADC_CHANNEL_0, &adc_raw[0]);
-        ESP_LOGI(TAG, "ADC%d Channel[%d] Raw Data: %d", ADC_UNIT_1, ADC_CHANNEL_0, adc_raw[0]);
+        min = 4095;
+        max = 0;
+
+        /* obtain the largest DC peak-to-peak value in 200ms intervals */
+        for(int i=0; i<100; i++){
+            adc_oneshot_read(handle1, ADC_CHANNEL_3, &adc_raw);
+            if(adc_raw < min)
+                min = adc_raw;
+            if(adc_raw > max) 
+                max = adc_raw;
+            vTaskDelay(pdMS_TO_TICKS(2));
+        }
+        int amplitude = max-min;
+        ESP_LOGI(TAG, "Amplitude: %d", amplitude);
 
         /* store LSB first, MSB last (little endian) */
-        data[0] = adc_raw[0] & 0xFF;
-        data[1] = (adc_raw[0] >> 8) & 0xFF;
-
+        data[0] = amplitude & 0xFF;
+        data[1] = (amplitude >> 8) & 0xFF;
         struct os_mbuf *om = ble_hs_mbuf_from_flat(data, 2);
-
+        
+        /* write "amplitude" data to BLE peripheral device */
         rc = ble_gattc_write_no_rsp(curr_handle,
                                 uart_rx_handle,
                                 om);
@@ -336,7 +352,7 @@ static void adc_task(void *arg){
             ble_gap_terminate(curr_handle, BLE_ERR_REM_USER_CONN_TERM);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
@@ -351,7 +367,7 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
-    /* initialize ADC1_CH0 */
+    /* initialize ADC1_CH3 */
     adc_init(&handle1, init_cfg, cfg);
 
     /* NimBLE stack initialization */
