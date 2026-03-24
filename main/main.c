@@ -234,6 +234,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg){
     int rc;
 
     switch(event->type){
+        /* determine if we should connect to a discovered device*/
         case BLE_GAP_EVENT_DISC:
             rc = ble_hs_adv_parse_fields(&fields, event->disc.data, event->disc.length_data);
             if(rc != 0)
@@ -242,6 +243,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg){
             connect_uart_device(&event->disc);
             return 0;
         
+        /* upon connection, add as peer object and begin attempting GATT operations */
         case BLE_GAP_EVENT_CONNECT:
             if(event->connect.status == 0){
                 rc = ble_gap_conn_find(event->connect.conn_handle, &desc);
@@ -249,7 +251,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg){
 
                 rc = peer_add(event->connect.conn_handle);
                 if(rc != 0){
-                    ESP_LOGE(TAG, "Failed to add peer, rc=%d\n", rc);
+                    ESP_LOGE(TAG, "Failed to add device as peer, rc=%d\n", rc);
                     return 0;
                 }
 
@@ -268,7 +270,6 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg){
         case BLE_GAP_EVENT_DISCONNECT:
             ESP_LOGI(TAG, "disconnected, reason=%d ", event->disconnect.reason);
             print_conn_desc(&event->disconnect.conn);
-            ESP_LOGI(TAG, "\n");
 
             peer_delete(event->disconnect.conn.conn_handle);
 
@@ -280,6 +281,7 @@ static int gap_event_handler(struct ble_gap_event *event, void *arg){
                         event->disc_complete.reason);
             return 0;
         
+        /* When peripheral device writes to this device (using NUS) print it */
         case BLE_GAP_EVENT_NOTIFY_RX:
             int len = OS_MBUF_PKTLEN(event->notify_rx.om);
             uint8_t data[128];
