@@ -1,11 +1,11 @@
 # C Implementation of BLE Central Device
 
-This repo contains C code which implements a fully functional BLE Central device, intended to run on an ESP32 microcontroller. The goal is to verify the functionality of my [custom PCB running CircuitPython](https://github.com/bigbyrus/pcb-assembly). To accomplish that goal, this implementation filters all devices discovered and **only attempts to connect to BLE peripheral devices who publicly advertise the Nordic UART Service**. Allowing me to have a simple stream of communication with my target device.
+This repository contains C code which implements a fully functional BLE Central device, intended to run on an ESP32 microcontroller. The goal is to verify the functionality of my [custom PCB running CircuitPython](https://github.com/bigbyrus/pcb-assembly). To accomplish that goal, this implementation filters all devices discovered and **only attempts to connect to BLE peripheral devices who publicly advertise the Nordic UART Service**. Allowing me to have a simple stream of communication with my target device.
 
 
 ![Demo](img/IMG_1625gif.gif)
 
-The video shows a simple potentiometer to display the basics. But the demo below will show **microphone data sent over BLE** being represented visually on the LEDs.
+The video shows a simple potentiometer to display the basic functionality. But the demo below will show **microphone data sent over BLE** being represented visually by the LEDs.
 
 
 Demo
@@ -33,4 +33,4 @@ The device that will **publicly advertise the Nordic UART Service** is a PCB ([b
     Microphone data is now visually represented on the array of LEDs by using BLE.
 </p>
 
-![Demo](img/IMG_1625gif.gif)
+![Demo](img/IMG_1641gif.gif)
