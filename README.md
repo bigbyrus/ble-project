@@ -33,4 +33,4 @@ The device that will **publicly advertise the Nordic UART Service** is a PCB ([b
     Microphone data is now visually represented on the array of LEDs by using BLE.
 </p>
 
-![Demo](img/IMG_1641gif.gif)
+![Demo](img/IMG_1641.gif)
