@@ -10,7 +10,6 @@ build/
 
 sdkconfig.old
 sdkconfig
-*.defaults
 *.defaults.esp32c2
 *.defaults.esp32c3
 *.defaults.esp32s3
